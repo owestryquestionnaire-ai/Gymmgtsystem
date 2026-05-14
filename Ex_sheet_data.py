@@ -1299,8 +1299,8 @@ elif page == "📊 Dashboard":
     conn.close()
 
     if active:
-        h1, h2, h3, h4 = st.columns([1.2, 2.5, 2.5, 1.2])
-        h1.markdown('<div class="dash-header">Patient</div>', unsafe_allow_html=True)
+        h1, h2, h3, h4 = st.columns([1.5, 2.2, 2.2, 1.1])
+        h1.markdown('<div class="dash-header">Patient Details</div>', unsafe_allow_html=True)
         h2.markdown('<div class="dash-header">✅ Completed</div>', unsafe_allow_html=True)
         h3.markdown('<div class="dash-header">⏳ Remaining</div>', unsafe_allow_html=True)
         h4.markdown('<div class="dash-header">Progress</div>', unsafe_allow_html=True)
@@ -1310,17 +1310,21 @@ elif page == "📊 Dashboard":
             th_name = th_name if th_name else "Unassigned"
             t_color = get_therapist_color(th_name)
 
-            done = [format_ex_details(ex) for ex in presc if ex.get('done', False)]
-            todo = [format_ex_details(ex) for ex in presc if not ex.get('done', False)]
+            # Using ex['name'] directly to strip out time and extra details for a cleaner view
+            done = [ex['name'] for ex in presc if ex.get('done', False)]
+            todo = [ex['name'] for ex in presc if not ex.get('done', False)]
 
-            r1, r2, r3, r4 = st.columns([1.2, 2.5, 2.5, 1.2])
+            r1, r2, r3, r4 = st.columns([1.5, 2.2, 2.2, 1.1])
             with r1:
+                # Combined Name, Therapist Badge, and Case Number into one condensed block
                 st.markdown(
-                    f"<div style='line-height:1.2; margin-bottom:2px;'><b>{name}</b><br><span style='font-size:12px; color:#666;'>{c_no}</span></div>",
-                    unsafe_allow_html=True)
-                st.markdown(
-                    f"<span style='background-color: {t_color}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px;'>🩺 {th_name}</span>",
-                    unsafe_allow_html=True)
+                    f"<div style='line-height: 1.2; padding-top: 5px;'>"
+                    f"<span style='font-size: 18px; font-weight: 800; color: #1976d2;'>{name}</span> "
+                    f"<span style='background-color: {t_color}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; vertical-align: middle;'>🩺 {th_name}</span><br>"
+                    f"<span style='font-size: 12px; font-weight: 600; color: #757575;'>Case: {c_no}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
 
             with r2:
                 html_done = "<br>".join([f"✔️ {x}" for x in done]) if done else "---"
@@ -1334,7 +1338,7 @@ elif page == "📊 Dashboard":
                 pct = len(done) / len(presc) if presc else 0
                 st.progress(pct)
                 st.markdown(
-                    f"<div style='font-size:12px; color:#666; margin-top:-10px;'>{int(pct * 100)}% complete</div>",
+                    f"<div style='font-size:12px; font-weight: bold; color:#666; margin-top:-10px;'>{int(pct * 100)}%</div>",
                     unsafe_allow_html=True)
 
             st.markdown("<hr style='margin: 8px 0px; padding: 0px;'>", unsafe_allow_html=True)
