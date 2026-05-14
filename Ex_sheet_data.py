@@ -15,6 +15,9 @@ st.markdown(
     .block-container {
         padding-top: 1.5rem !important;
         padding-bottom: 1rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+        max-width: 100% !important;
     }
 
     /* Global Base Font Size */
@@ -33,6 +36,11 @@ st.markdown(
     /* --- DASHBOARD CONDENSING CSS --- */
     .ex-list-condensed { max-height: 75px; overflow-y: auto; font-size: 14px; line-height: 1.2; background: #fdfdfd; border: 1px solid #eee; padding: 4px 6px; border-radius: 4px; margin-bottom: 0px; }
     .dash-header { font-weight: bold; font-size: 16px; border-bottom: 2px solid #333; padding-bottom: 2px; margin-bottom: 4px; color: #333; }
+
+    /* Queue Styles */
+    .queue-card { background-color: white; border: 1px solid #ddd; padding: 10px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #ffa000; }
+    .queue-active { border-left: 5px solid #43a047; background-color: #f1f8e9; }
+    .wait-time { font-size: 24px; font-weight: bold; color: #d32f2f; }
 
     /* --- SIDEBAR NAVIGATION STYLING --- */
     [data-testid="stSidebar"] .stRadio > label {
@@ -75,6 +83,56 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # New Table for Queueing
+    cursor.execute('''CREATE TABLE IF NOT EXISTS queues (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, case_no TEXT, p_name TEXT, 
+        item_id TEXT, item_name TEXT, prescribed_mins INTEGER, 
+        status TEXT DEFAULT 'waiting', joined_at TEXT)''')
+
+    conn.commit();
+    conn.close()
+
+
+def add_to_queue(case_no, p_name, item_id, item_name, mins):
+    conn = sqlite3.connect(DB_FILE, timeout=10);
+    cursor = conn.cursor()
+    # Prevent duplicate entry for same person/machine
+    exists = cursor.execute("SELECT id FROM queues WHERE case_no = ? AND item_id = ?", (case_no, item_id)).fetchone()
+    if not exists:
+        cursor.execute(
+            "INSERT INTO queues (case_no, p_name, item_id, item_name, prescribed_mins, joined_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (case_no, p_name, item_id, item_name, int(mins if mins else 10), datetime.now().strftime('%H:%M:%S')))
+    conn.commit();
+    conn.close()
+
+
+def update_queue_status(qid, status, case_no=None, item_id=None):
+    conn = sqlite3.connect(DB_FILE, timeout=10)
+    if status == "finished":
+        conn.execute("DELETE FROM queues WHERE id = ?", (qid,))
+    else:
+        conn.execute("UPDATE queues SET status = ? WHERE id = ?", (status, qid))
+
+        # AUTO-TICK EXERCISE WHEN STARTED
+        if status == "active" and case_no and item_id:
+            # Find the active patient's current history record
+            row = conn.execute(
+                "SELECT id, prescription_json FROM history WHERE case_no = ? AND is_checked_in = 1 ORDER BY id DESC LIMIT 1",
+                (case_no,)).fetchone()
+            if row:
+                hist_id, presc_str = row
+                presc = json.loads(presc_str)
+                # Find the exact exercise and set it to 'done'
+                for ex in presc:
+                    if ex['id'] == item_id:
+                        ex['done'] = True
+                # Save it back to the database
+                conn.execute("UPDATE history SET prescription_json = ? WHERE id = ?",
+                             (json.dumps(presc, ensure_ascii=False), hist_id))
+                # Force update Streamlit's session state checkbox instantly
+                state_key = f"done_{case_no}_{item_id}"
+                st.session_state[state_key] = True
+
     conn.commit();
     conn.close()
 
@@ -82,6 +140,8 @@ def init_db():
 def set_check_status(case_no, status):
     conn = sqlite3.connect(DB_FILE, timeout=10)
     conn.execute("UPDATE history SET is_checked_in = ? WHERE case_no = ?", (status, case_no))
+    if status == 0:  # If checking out, automatically remove from all queues
+        conn.execute("DELETE FROM queues WHERE case_no = ?", (case_no,))
     conn.commit();
     conn.close()
 
@@ -156,11 +216,18 @@ EXERCISE_DB = {
     "Strengthening": [{"id": "st1", "name": "Quad exercise"}, {"id": "st2", "name": "企 ＋ 屈腳"},
                       {"id": "st3", "name": "Wall slides"}, {"id": "st4", "name": "企 Hip strengthening"},
                       {"id": "st7", "name": "Bridging"}, {"id": "st8", "name": "Minipress"}],
-    "Functional": [{"id": "f4", "name": "Stepping on box"}, {"id": "f6", "name": "Hurdles"},
-                   {"id": "f11", "name": "海棉單腳企"}, {"id": "f8", "name": "踩磅"},
-                   {"id": "f10", "name": "Wall bar: 坐>企"}],
-    "Others": [{"id": "o1", "name": "Massage roller"}, {"id": "o3", "name": "斜板"}]
+    "Functional": [{"id": "f4", "name": "Stepping on box"}, {"id": "f6", "name": "跨欄"},
+                   {"id": "f13", "name": "Stepping on foam"}, {"id": "f8", "name": "PWB踩磅"},
+                   {"id": "f10", "name": "Wall bar: 坐>企"}, {"id": "f14", "name": "Arjo"},
+                   {"id": "f11", "name": "Foam 單腳企"}],
+    "Walking Exercise": [{"id": "w1", "name": "Stick walking"}, {"id": "w2", "name": "Quad walking"},
+                         {"id": "w3", "name": "Stairs"}],
+    "Others": [{"id": "o1", "name": "Massage roller"}, {"id": "o4", "name": "網球"}, {"id": "o3", "name": "斜板"}],
+    "Assessment": [{"id": "a1", "name": "KOOS"}, {"id": "a2", "name": "考試"}]
 }
+
+# Items requiring queue
+QUEUEABLE_IDS = {"e1": "Magnetopulse", "e2": "Gameready", "s5": "Nustep"}
 
 
 def get_ex_info(target_eid):
@@ -207,7 +274,6 @@ def format_ex_details(item):
     details = []
 
     if eid == "st4":
-        # Specialized rendering for Hip Strengthening
         dirs = [("rf", "Right Flex前"), ("ra", "Right Abd側"), ("re", "Right Ext後"),
                 ("lf", "Left Flex前"), ("la", "Left Abd側"), ("le", "Left Ext後")]
         st4_details = []
@@ -215,7 +281,7 @@ def format_ex_details(item):
             if item.get(f"{d_id}_chk"):
                 m = item.get(f"{d_id}_mins", "10")
                 g = "腳踩地" if item.get(f"{d_id}_gnd") else ""
-                band = f"{item.get(f'{d_id}_band_color', 'Red')} band" if item.get(f"{d_id}_band_chk") else ""
+                band = item.get(f"{d_id}_band_color", "") if item.get(f"{d_id}_band_chk") else ""
 
                 parts = [f"{m} mins"]
                 if g: parts.append(g)
@@ -227,7 +293,6 @@ def format_ex_details(item):
             details.append("; ".join(st4_details))
 
     else:
-        # Standard rendering for all other items
         if 'mins' in item: details.append(f"{item['mins']} mins")
         if 'side' in item: details.append(item['side'])
         if 'pressure' in item: details.append(f"{item['pressure']} pressure")
@@ -235,9 +300,8 @@ def format_ex_details(item):
         if 'mode' in item: details.append(item['mode'])
         if 'region' in item: details.append(item['region'])
 
-        # Handle new strengthening formatting
         if 'weight' in item and str(item['weight']).strip():
-            if eid in ["st1", "st2", "e3"]:  # Add Sandbag prefix for specific exercises
+            if eid in ["st1", "st2", "e3"]:
                 details.append(f"Sandbag: {item['weight']} lbs")
             else:
                 details.append(f"{item['weight']} lbs")
@@ -251,10 +315,10 @@ def format_ex_details(item):
         if 'rt_res' in item and item['rt_res']: details.append(f"{item['rt_res']} Nm")
 
         if item.get('sling_abd'):
-            tb = f" ({item.get('sabd_color', '')} theraband)" if item.get('sabd_tb') else ""
+            tb = f" ({item.get('sabd_color', '')})" if item.get('sabd_tb') else ""
             details.append(f"平訓＋左右{tb}")
         if item.get('sling_flex'):
-            tb = f" ({item.get('sflx_color', '')} theraband)" if item.get('sflx_tb') else ""
+            tb = f" ({item.get('sflx_color', '')})" if item.get('sflx_tb') else ""
             details.append(f"側訓+前後{tb}")
         if item.get('towel'): details.append("毛巾於膝下")
 
@@ -266,7 +330,17 @@ def format_ex_details(item):
             if r: cords.append(f"{r} red")
             if cords: details.append(f"{' + '.join(cords)} cord")
 
-        # Handle strict legacy formatting strings if present
+        if 'box_height' in item: details.append(item['box_height'])
+        if item.get('downstairs'): details.append("Downstairs training")
+        if 'hurdle_height' in item: details.append(item['hurdle_height'])
+        if item.get('pbar'): details.append("平衡架內")
+        if item.get('family'): details.append("家人陪")
+        if 'target_wt' in item and item['target_wt']: details.append(f"Target: {item['target_wt']}")
+        if 'target_sec' in item and item['target_sec']: details.append(f"Target: {item['target_sec']} secs")
+
+        if 'roller_region' in item: details.append(item['roller_region'])
+        if 'slant_level' in item: details.append(item['slant_level'])
+
         legacy_w1 = item.get('st1_weight')
         legacy_w2 = item.get('st2_weight')
         if legacy_w1: details.append(f"Sandbag: {legacy_w1} lbs")
@@ -314,10 +388,10 @@ if not st.session_state.logged_in:
 
 # --- ROLE-BASED NAVIGATION CONFIGURATION ---
 if st.session_state.current_therapist == "PCA":
-    pages = ["🗒️ Active Cases", "📊 Dashboard"]
+    pages = ["🗒️ Active Cases", "📊 Dashboard", "🚦 Queue Status"]
 else:
-    pages = ["👥 Database", "📝 Assessment", "📋 Prescription", "🗒️ Active Cases", "📊 Dashboard", "📅 Schedule",
-             "🗂️ Patient History"]
+    pages = ["👥 Database", "📝 Assessment", "📋 Prescription", "🗒️ Active Cases", "🚦 Queue Status", "📊 Dashboard",
+             "📅 Schedule", "🗂️ Patient History"]
 
 
 def nav_to(page_name):
@@ -492,8 +566,8 @@ elif page == "📋 Prescription":
                 _, cat = get_ex_info(eid)
                 if cat == "Electrotherapy":
                     ap["exercises"][eid] = {"mins": "15"}
-                elif cat in ["Mobilization", "Strengthening"]:
-                    ap["exercises"][eid] = {"mins": "10"}
+                elif cat in ["Walking Exercise", "Assessment"]:
+                    ap["exercises"][eid] = {}
                 else:
                     ap["exercises"][eid] = {"mins": "10"}
         else:
@@ -540,6 +614,8 @@ elif page == "📋 Prescription":
                 ex_data.update(data)
                 if ex_data.get('region') == 'Other (Type below)' and 'other_region' in ex_data:
                     ex_data['region'] = ex_data['other_region']
+                if ex_data.get('roller_region') == 'Other (Type below)' and 'custom_roller_region' in ex_data:
+                    ex_data['roller_region'] = ex_data['custom_roller_region']
             sel.append(ex_data)
 
         save_h(ap["case_no"], ap["p_name"], sel, op_string,
@@ -796,13 +872,13 @@ elif page == "📋 Prescription":
                             if data.get("sling_abd", False):
                                 cb1, cb2 = st.columns(2)
                                 with cb1:
-                                    st.checkbox("Theraband", value=data.get("sabd_tb", False), key=f"ui_sabdtb_{eid}",
+                                    st.checkbox("加橡根", value=data.get("sabd_tb", False), key=f"ui_sabdtb_{eid}",
                                                 on_change=update_dict, args=(eid, "sabd_tb", f"ui_sabdtb_{eid}"))
                                 if data.get("sabd_tb", False):
                                     with cb2:
-                                        opts = ["red", "green"]
-                                        current = data.get("sabd_color", "red")
-                                        st.selectbox("Color", opts, index=opts.index(current) if current in opts else 0,
+                                        opts = ["紅橡根", "綠橡根"]
+                                        curr = data.get("sabd_color", "紅橡根")
+                                        st.selectbox("Color", opts, index=opts.index(curr) if curr in opts else 0,
                                                      key=f"ui_sabdcol_{eid}", on_change=update_dict,
                                                      args=(eid, "sabd_color", f"ui_sabdcol_{eid}"),
                                                      label_visibility="collapsed")
@@ -813,13 +889,13 @@ elif page == "📋 Prescription":
                             if data.get("sling_flex", False):
                                 cf1, cf2 = st.columns(2)
                                 with cf1:
-                                    st.checkbox("Theraband", value=data.get("sflx_tb", False), key=f"ui_sflxtb_{eid}",
+                                    st.checkbox("加橡根", value=data.get("sflx_tb", False), key=f"ui_sflxtb_{eid}",
                                                 on_change=update_dict, args=(eid, "sflx_tb", f"ui_sflxtb_{eid}"))
                                 if data.get("sflx_tb", False):
                                     with cf2:
-                                        opts = ["red", "green"]
-                                        current = data.get("sflx_color", "red")
-                                        st.selectbox("Color", opts, index=opts.index(current) if current in opts else 0,
+                                        opts = ["紅橡根", "綠橡根"]
+                                        curr = data.get("sflx_color", "紅橡根")
+                                        st.selectbox("Color", opts, index=opts.index(curr) if curr in opts else 0,
                                                      key=f"ui_sflxcol_{eid}", on_change=update_dict,
                                                      args=(eid, "sflx_color", f"ui_sflxcol_{eid}"),
                                                      label_visibility="collapsed")
@@ -903,14 +979,14 @@ elif page == "📋 Prescription":
                                                             key=f"ui_gnd_{eid}_{d_id}", on_change=update_dict,
                                                             args=(eid, f"{d_id}_gnd", f"ui_gnd_{eid}_{d_id}"))
                                             with c3:
-                                                st.checkbox("Res. Band", value=data.get(f"{d_id}_band_chk", False),
+                                                st.checkbox("加橡根", value=data.get(f"{d_id}_band_chk", False),
                                                             key=f"ui_bnd_{eid}_{d_id}", on_change=update_dict,
                                                             args=(eid, f"{d_id}_band_chk", f"ui_bnd_{eid}_{d_id}"))
                                                 if data.get(f"{d_id}_band_chk", False):
-                                                    opts = ["Yellow", "Red", "Green", "Blue", "Black"]
-                                                    curr = data.get(f"{d_id}_band_color", "Red")
+                                                    opts = ["紅橡根", "綠橡根"]
+                                                    curr = data.get(f"{d_id}_band_color", "紅橡根")
                                                     st.selectbox("Color", opts,
-                                                                 index=opts.index(curr) if curr in opts else 1,
+                                                                 index=opts.index(curr) if curr in opts else 0,
                                                                  key=f"ui_bcol_{eid}_{d_id}", on_change=update_dict,
                                                                  args=(eid, f"{d_id}_band_color",
                                                                        f"ui_bcol_{eid}_{d_id}"),
@@ -939,18 +1015,126 @@ elif page == "📋 Prescription":
                                                             key=f"ui_gnd_{eid}_{d_id}", on_change=update_dict,
                                                             args=(eid, f"{d_id}_gnd", f"ui_gnd_{eid}_{d_id}"))
                                             with c3:
-                                                st.checkbox("Res. Band", value=data.get(f"{d_id}_band_chk", False),
+                                                st.checkbox("加橡根", value=data.get(f"{d_id}_band_chk", False),
                                                             key=f"ui_bnd_{eid}_{d_id}", on_change=update_dict,
                                                             args=(eid, f"{d_id}_band_chk", f"ui_bnd_{eid}_{d_id}"))
                                                 if data.get(f"{d_id}_band_chk", False):
-                                                    opts = ["Yellow", "Red", "Green", "Blue", "Black"]
-                                                    curr = data.get(f"{d_id}_band_color", "Red")
+                                                    opts = ["紅橡根", "綠橡根"]
+                                                    curr = data.get(f"{d_id}_band_color", "紅橡根")
                                                     st.selectbox("Color", opts,
-                                                                 index=opts.index(curr) if curr in opts else 1,
+                                                                 index=opts.index(curr) if curr in opts else 0,
                                                                  key=f"ui_bcol_{eid}_{d_id}", on_change=update_dict,
                                                                  args=(eid, f"{d_id}_band_color",
                                                                        f"ui_bcol_{eid}_{d_id}"),
                                                                  label_visibility="collapsed")
+
+                    elif ex_cat == "Functional":
+                        if eid == "f4":  # Stepping on box
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+                            with c2:
+                                opts = ["4\"", "6\"", "8\""]
+                                current = data.get("box_height", "4\"")
+                                st.selectbox("Height", opts, index=opts.index(current) if current in opts else 0,
+                                             key=f"ui_hgt_{eid}", on_change=update_dict,
+                                             args=(eid, "box_height", f"ui_hgt_{eid}"))
+                            with c3:
+                                st.markdown("<div style='margin-top: 35px;'></div>", unsafe_allow_html=True)
+                                st.checkbox("Downstairs training", value=data.get("downstairs", False),
+                                            key=f"ui_dwst_{eid}", on_change=update_dict,
+                                            args=(eid, "downstairs", f"ui_dwst_{eid}"))
+
+                        elif eid == "f6":  # 跨欄
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+                            with c2:
+                                opts = ["4\"", "6\""]
+                                current = data.get("hurdle_height", "4\"")
+                                st.selectbox("Height", opts, index=opts.index(current) if current in opts else 0,
+                                             key=f"ui_hgt_{eid}", on_change=update_dict,
+                                             args=(eid, "hurdle_height", f"ui_hgt_{eid}"))
+
+                        elif eid == "f13":  # Stepping on foam
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+                            with c2:
+                                st.markdown("<div style='margin-top: 35px;'></div>", unsafe_allow_html=True)
+                                st.checkbox("平衡架內", value=data.get("pbar", False), key=f"ui_pbar_{eid}",
+                                            on_change=update_dict, args=(eid, "pbar", f"ui_pbar_{eid}"))
+                            with c3:
+                                st.markdown("<div style='margin-top: 35px;'></div>", unsafe_allow_html=True)
+                                st.checkbox("家人陪", value=data.get("family", False), key=f"ui_fam_{eid}",
+                                            on_change=update_dict, args=(eid, "family", f"ui_fam_{eid}"))
+
+                        elif eid == "f8":  # PWB踩磅
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+                            with c2:
+                                st.text_input("Target weight", value=data.get("target_wt", ""), key=f"ui_twt_{eid}",
+                                              on_change=update_dict, args=(eid, "target_wt", f"ui_twt_{eid}"))
+
+                        elif eid == "f11":  # Foam 單腳企
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+                            with c2:
+                                st.text_input("Target (seconds)", value=data.get("target_sec", ""),
+                                              key=f"ui_tsec_{eid}", on_change=update_dict,
+                                              args=(eid, "target_sec", f"ui_tsec_{eid}"))
+
+                        else:
+                            c1, _ = st.columns(2)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+
+                    elif ex_cat == "Others":
+                        if eid in ["o1", "o4"]:  # Massage roller / 網球
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+                            with c2:
+                                opts = ["Quad", "ITB", "Calf", "Hamstring", "Other (Type below)"]
+                                current = data.get("roller_region", "Quad")
+                                st.selectbox("Region", opts, index=opts.index(current) if current in opts else 0,
+                                             key=f"ui_rreg_{eid}", on_change=update_dict,
+                                             args=(eid, "roller_region", f"ui_rreg_{eid}"))
+                            with c3:
+                                if data.get("roller_region", "Quad") == "Other (Type below)":
+                                    st.text_input("Custom Region", value=data.get("custom_roller_region", ""),
+                                                  placeholder="Type here...", key=f"ui_crreg_{eid}",
+                                                  on_change=update_dict,
+                                                  args=(eid, "custom_roller_region", f"ui_crreg_{eid}"))
+                        elif eid == "o3":  # 斜板
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+                            with c2:
+                                opts = ["1格", "2格", "3格", "4格"]
+                                current = data.get("slant_level", "1格")
+                                st.selectbox("Level", opts, index=opts.index(current) if current in opts else 0,
+                                             key=f"ui_slant_{eid}", on_change=update_dict,
+                                             args=(eid, "slant_level", f"ui_slant_{eid}"))
+                        else:
+                            c1, _ = st.columns(2)
+                            with c1:
+                                st.text_input("Mins", value=data.get("mins", "10"), key=f"ui_min_{eid}",
+                                              on_change=update_dict, args=(eid, "mins", f"ui_min_{eid}"))
+
+                    elif ex_cat in ["Walking Exercise", "Assessment"]:
+                        st.caption("Standard item. No additional parameters required.")
+
                     else:
                         c1, _ = st.columns(2)
                         with c1:
@@ -965,11 +1149,14 @@ elif page == "📋 Prescription":
         st.markdown('<div class="dash-header">✔️ Select Exercises</div>', unsafe_allow_html=True)
         with st.container(border=True):
             s_c1, s_c2 = st.columns(2)
-            cats = list(EXERCISE_DB.items())
-            mid = len(cats) // 2 + 1
 
-            for idx, (cat, items) in enumerate(cats):
-                col_to_use = s_c1 if idx < mid else s_c2
+            # SPLIT LOGIC: Assign to Left/Right columns to balance space
+            for cat, items in EXERCISE_DB.items():
+                if cat in ["Electrotherapy", "Mobilization", "Strengthening"]:
+                    col_to_use = s_c1
+                else:
+                    col_to_use = s_c2
+
                 with col_to_use:
                     st.markdown(f'<div class="cat-header">{cat}</div>', unsafe_allow_html=True)
                     for ex in items:
@@ -984,6 +1171,9 @@ elif page == "🗒️ Active Cases":
 
     rows = conn.execute(
         "SELECT id, case_no, p_name, prescription_json, next_appt_date, next_appt_time, assessment_text, p_precautions, therapist, op_details, op_date FROM history WHERE is_checked_in = 1 AND id IN (SELECT MAX(id) FROM history GROUP BY case_no) ORDER BY p_name ASC").fetchall()
+
+    # Get current queue cases to show status
+    queued_cases = [r[0] for r in conn.execute("SELECT case_no FROM queues").fetchall()]
     conn.close()
 
     if rows:
@@ -1009,14 +1199,30 @@ elif page == "🗒️ Active Cases":
 
                     presc_list = json.loads(r[3])
                     for ex in presc_list:
+                        c1, c2 = st.columns([0.7, 0.3])
                         is_done = ex.get('done', False)
-                        st.checkbox(
+
+                        # Generate the dynamic checkbox key so auto-ticking works via session state
+                        checkbox_key = f"done_{r[1]}_{ex['id']}"
+                        # Ensure it exists in session state if it was auto-ticked from the Queue tab
+                        if checkbox_key not in st.session_state:
+                            st.session_state[checkbox_key] = is_done
+
+                        c1.checkbox(
                             format_ex_details(ex),
-                            value=is_done,
-                            key=f"done_{r[1]}_{ex['id']}",
+                            value=st.session_state[checkbox_key],
+                            key=checkbox_key,
                             on_change=toggle_exercise_db,
                             args=(r[0], r[1], ex['id'])
                         )
+
+                        # Queue Button for specific IDs
+                        if ex['id'] in QUEUEABLE_IDS:
+                            q_label = "✅ 排隊中" if r[1] in queued_cases else "🚦 排隊"
+                            if c2.button(q_label, key=f"q_{r[1]}_{ex['id']}", disabled=r[1] in queued_cases):
+                                add_to_queue(r[1], r[2], ex['id'], QUEUEABLE_IDS[ex['id']], ex.get('mins', 15))
+                                st.rerun()
+
                     st.divider()
 
                     if st.checkbox("📅 Schedule Next Visit", key=f"show_appt_{r[1]}"):
@@ -1039,6 +1245,50 @@ elif page == "🗒️ Active Cases":
                         st.rerun()
     else:
         st.info("Gym is empty.")
+
+# --- PAGE: QUEUE STATUS ---
+elif page == "🚦 Queue Status":
+    st.subheader("🚦 Equipment Real-time Queue List")
+
+    conn = sqlite3.connect(DB_FILE, timeout=10)
+    q_data = pd.read_sql_query("SELECT * FROM queues ORDER BY id ASC", conn)
+    conn.close()
+
+    cols = st.columns(3)
+    for i, (item_id, item_label) in enumerate(QUEUEABLE_IDS.items()):
+        with cols[i]:
+            st.markdown(f"### ⚙️ {item_label}")
+            item_q = q_data[q_data['item_id'] == item_id]
+
+            # Calculate Waiting Time (Includes BOTH waiting AND active patient times)
+            active_and_waiting = item_q[item_q['status'].isin(['waiting', 'active'])]
+            total_wait = active_and_waiting['prescribed_mins'].sum()
+            st.markdown(f"Estimated Wait: <span class='wait-time'>{total_wait} mins</span>", unsafe_allow_html=True)
+            st.divider()
+
+            if item_q.empty:
+                st.caption("No one in queue.")
+            else:
+                for _, p in item_q.iterrows():
+                    is_active = p['status'] == 'active'
+                    status_cls = "queue-active" if is_active else ""
+                    st.markdown(f"""
+                    <div class='queue-card {status_cls}'>
+                        <b>{p['p_name']}</b> ({p['case_no']})<br>
+                        Time: {p['prescribed_mins']} mins | Joined: {p['joined_at']}<br>
+                        Status: <b>{p['status'].upper()}</b>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    b1, b2 = st.columns(2)
+                    if not is_active:
+                        if b1.button("▶️ Start", key=f"start_{p['id']}"):
+                            # This will NOW auto-tick the exercise in the database and session state
+                            update_queue_status(p['id'], "active", p['case_no'], p['item_id'])
+                            st.rerun()
+                    if b2.button("✅ Finish", key=f"fin_{p['id']}"):
+                        update_queue_status(p['id'], "finished")
+                        st.rerun()
 
 # --- PAGE 5: DASHBOARD ---
 elif page == "📊 Dashboard":
