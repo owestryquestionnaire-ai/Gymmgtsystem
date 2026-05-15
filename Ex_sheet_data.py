@@ -23,6 +23,17 @@ st.markdown(
     /* Global Base Font Size */
     html, body, [class*="css"]  { font-size: 16px !important; }
 
+    /* --- GYM FLOOR EXERCISES: LARGER FONT & NARROWER SPACING --- */
+    div[data-testid="stCheckbox"] label p {
+        font-size: 19px !important; 
+        font-weight: 600 !important;
+        line-height: 1.2 !important;
+    }
+    div[data-testid="stCheckbox"] {
+        margin-bottom: -14px !important; 
+        padding-bottom: 0px !important;
+    }
+
     /* Custom Element Sizes */
     .cat-header { font-size: 17px; font-weight: 800; text-decoration: underline; background-color: #e1f5fe; color: #01579b; padding: 5px; border-radius: 4px; margin-bottom: 10px; margin-top: 10px; }
     .config-box { padding-left: 15px; border-left: 3px solid #1f77b4; background-color: #f0f2f6; margin-bottom: 15px; padding-top: 8px; padding-bottom: 8px; border-radius: 0 5px 5px 0; }
@@ -237,8 +248,8 @@ if "logged_in" not in st.session_state:
     if "user" in st.query_params:
         st.session_state.current_therapist = st.query_params["user"]
         st.session_state.logged_in = True
-        if "sidebar_radio" not in st.session_state:
-            st.session_state.sidebar_radio = "🗒️ Active Cases" if st.session_state.current_therapist == "PCA" else "👥 Database"
+        if "nav_radio_key" not in st.session_state:
+            st.session_state.nav_radio_key = "🗒️ Active Cases" if st.session_state.current_therapist == "PCA" else "👥 Database"
     else:
         st.session_state.logged_in = False
         st.session_state.current_therapist = ""
@@ -254,8 +265,8 @@ if "active_patient" not in st.session_state:
         "op_notes": "", "op_date": datetime.now().date()
     }
 
-if "sidebar_radio" not in st.session_state:
-    st.session_state.sidebar_radio = "👥 Database"
+if "nav_radio_key" not in st.session_state:
+    st.session_state.nav_radio_key = "👥 Database"
 
 ap = st.session_state.active_patient
 
@@ -365,9 +376,9 @@ if not st.session_state.logged_in:
                 st.query_params["user"] = user
 
                 if st.session_state.current_therapist == "PCA":
-                    st.session_state.sidebar_radio = "🗒️ Active Cases"
+                    st.session_state.nav_radio_key = "🗒️ Active Cases"
                 else:
-                    st.session_state.sidebar_radio = "👥 Database"
+                    st.session_state.nav_radio_key = "👥 Database"
 
                 st.rerun()
             else:
@@ -382,12 +393,12 @@ else:
              "📅 Schedule", "🗂️ Patient History"]
 
 def nav_to(page_name):
-    st.session_state.sidebar_radio = page_name
+    st.session_state.nav_radio_key = page_name
 
 # --- APP LAYOUT ---
 st.title("🏋️‍♂️ Gym Management System")
 
-page = st.sidebar.radio("Navigation Panel", pages, key="sidebar_radio")
+page = st.sidebar.radio("Navigation Panel", pages, key="nav_radio_key")
 
 st.sidebar.divider()
 st.sidebar.markdown(f"**🩺 Logged in as:** {st.session_state.current_therapist}")
@@ -396,7 +407,7 @@ st.sidebar.markdown(f"**🩺 Logged in as:** {st.session_state.current_therapist
 def perform_logout():
     st.session_state.logged_in = False
     st.session_state.current_therapist = ""
-    st.session_state.sidebar_radio = "👥 Database"
+    st.session_state.nav_radio_key = "👥 Database"
     st.query_params.clear()
 
 st.sidebar.button("Log Out", use_container_width=True, on_click=perform_logout)
@@ -1275,13 +1286,11 @@ elif page == "📊 Dashboard":
             th_name = th_name if th_name else "Unassigned"
             t_color = get_therapist_color(th_name)
 
-            # Using ex['name'] directly to strip out time and extra details for a cleaner view
             done = [ex['name'] for ex in presc if ex.get('done', False)]
             todo = [ex['name'] for ex in presc if not ex.get('done', False)]
 
             r1, r2, r3, r4 = st.columns([1.5, 2.2, 2.2, 1.1])
             with r1:
-                # Combined Name, Therapist Badge, and Case Number into one condensed block
                 st.markdown(
                     f"<div style='line-height: 1.2; padding-top: 5px;'>"
                     f"<span style='font-size: 18px; font-weight: 800; color: #1976d2;'>{name}</span> "
