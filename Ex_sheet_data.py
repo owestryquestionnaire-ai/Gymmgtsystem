@@ -65,7 +65,7 @@ DB_FILE = "gym_system.db"
 
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE, timeout=10);
+    conn = sqlite3.connect(DB_FILE, timeout=10)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, case_no TEXT, p_name TEXT, timestamp TEXT,
@@ -89,20 +89,19 @@ def init_db():
         item_id TEXT, item_name TEXT, prescribed_mins INTEGER, 
         status TEXT DEFAULT 'waiting', joined_at TEXT)''')
 
-    conn.commit();
+    conn.commit()
     conn.close()
 
 
 def add_to_queue(case_no, p_name, item_id, item_name, mins):
-    conn = sqlite3.connect(DB_FILE, timeout=10);
+    conn = sqlite3.connect(DB_FILE, timeout=10)
     cursor = conn.cursor()
-    # Prevent duplicate entry for same person/machine
     exists = cursor.execute("SELECT id FROM queues WHERE case_no = ? AND item_id = ?", (case_no, item_id)).fetchone()
     if not exists:
         cursor.execute(
             "INSERT INTO queues (case_no, p_name, item_id, item_name, prescribed_mins, joined_at) VALUES (?, ?, ?, ?, ?, ?)",
             (case_no, p_name, item_id, item_name, int(mins if mins else 10), datetime.now().strftime('%H:%M:%S')))
-    conn.commit();
+    conn.commit()
     conn.close()
 
 
@@ -113,36 +112,31 @@ def update_queue_status(qid, status, case_no=None, item_id=None):
     else:
         conn.execute("UPDATE queues SET status = ? WHERE id = ?", (status, qid))
 
-        # AUTO-TICK EXERCISE WHEN STARTED
         if status == "active" and case_no and item_id:
-            # Find the active patient's current history record
             row = conn.execute(
                 "SELECT id, prescription_json FROM history WHERE case_no = ? AND is_checked_in = 1 ORDER BY id DESC LIMIT 1",
                 (case_no,)).fetchone()
             if row:
                 hist_id, presc_str = row
                 presc = json.loads(presc_str)
-                # Find the exact exercise and set it to 'done'
                 for ex in presc:
                     if ex['id'] == item_id:
                         ex['done'] = True
-                # Save it back to the database
                 conn.execute("UPDATE history SET prescription_json = ? WHERE id = ?",
                              (json.dumps(presc, ensure_ascii=False), hist_id))
-                # Force update Streamlit's session state checkbox instantly
                 state_key = f"done_{case_no}_{item_id}"
                 st.session_state[state_key] = True
 
-    conn.commit();
+    conn.commit()
     conn.close()
 
 
 def set_check_status(case_no, status):
     conn = sqlite3.connect(DB_FILE, timeout=10)
     conn.execute("UPDATE history SET is_checked_in = ? WHERE case_no = ?", (status, case_no))
-    if status == 0:  # If checking out, automatically remove from all queues
+    if status == 0:
         conn.execute("DELETE FROM queues WHERE case_no = ?", (case_no,))
-    conn.commit();
+    conn.commit()
     conn.close()
 
 
@@ -150,19 +144,19 @@ def update_appt(case_no, n_date, n_time):
     conn = sqlite3.connect(DB_FILE, timeout=10)
     conn.execute("UPDATE history SET next_appt_date = ?, next_appt_time = ? WHERE case_no = ?",
                  (n_date, n_time, case_no))
-    conn.commit();
+    conn.commit()
     conn.close()
 
 
 def save_h(c_no, name, presc, op_text, o_date, p_class, p_pre, is_chk, n_date, n_time, assessment, therapist):
-    conn = sqlite3.connect(DB_FILE, timeout=10);
+    conn = sqlite3.connect(DB_FILE, timeout=10)
     cursor = conn.cursor()
     cursor.execute('''INSERT INTO history 
         (case_no, p_name, timestamp, op_details, op_date, p_class, p_precautions, prescription_json, is_checked_in, next_appt_date, next_appt_time, assessment_text, therapist) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                    (c_no, name, datetime.now().strftime('%Y-%m-%d %H:%M'), op_text, o_date, p_class, p_pre,
                     json.dumps(presc, ensure_ascii=False), is_chk, n_date, n_time, assessment, therapist))
-    conn.commit();
+    conn.commit()
     conn.close()
 
 
@@ -231,7 +225,6 @@ QUEUEABLE_IDS = {"e1": "Magnetopulse", "e2": "Gameready", "s5": "Nustep"}
 
 
 def get_ex_info(target_eid):
-    """Helper to fetch name and category for rendering the cart."""
     for cat, items in EXERCISE_DB.items():
         for ex in items:
             if ex["id"] == target_eid:
@@ -322,7 +315,7 @@ def format_ex_details(item):
             details.append(f"側訓+前後{tb}")
         if item.get('towel'): details.append("毛巾於膝下")
 
-        if eid == "st8":  # Minipress Cords
+        if eid == "st8":
             cords = []
             b = item.get('black_cord', '')
             r = item.get('red_cord', '')
@@ -340,11 +333,6 @@ def format_ex_details(item):
 
         if 'roller_region' in item: details.append(item['roller_region'])
         if 'slant_level' in item: details.append(item['slant_level'])
-
-        legacy_w1 = item.get('st1_weight')
-        legacy_w2 = item.get('st2_weight')
-        if legacy_w1: details.append(f"Sandbag: {legacy_w1} lbs")
-        if legacy_w2: details.append(f"Sandbag: {legacy_w2} lbs")
 
     detail_str = f" ({', '.join(filter(None, details))})" if details else ""
     return f"{name}{detail_str}"
@@ -393,10 +381,8 @@ else:
     pages = ["👥 Database", "📝 Assessment", "📋 Prescription", "🗒️ Active Cases", "🚦 Queue Status", "📊 Dashboard",
              "📅 Schedule", "🗂️ Patient History"]
 
-
 def nav_to(page_name):
     st.session_state.sidebar_radio = page_name
-
 
 # --- APP LAYOUT ---
 st.title("🏋️‍♂️ Gym Management System")
@@ -412,7 +398,6 @@ def perform_logout():
     st.session_state.current_therapist = ""
     st.session_state.sidebar_radio = "👥 Database"
     st.query_params.clear()
-
 
 st.sidebar.button("Log Out", use_container_width=True, on_click=perform_logout)
 
@@ -444,7 +429,6 @@ if page == "👥 Database":
             c[1].write(row[2])
             c[2].write(f"📅 {row[3]}" if row[3] != 'None' and row[3] else "No Appt")
 
-
             def load_and_assess(r=row):
                 ex_dict = {}
                 try:
@@ -472,14 +456,11 @@ if page == "👥 Database":
                 }
                 nav_to("📝 Assessment")
 
-
             def quick_history(c_no=row[1]):
                 st.session_state.active_patient["case_no"] = c_no
                 nav_to("🗂️ Patient History")
 
-
-            c[3].button("Assess", key=f"ld_{row[0]}", type="primary", use_container_width=True,
-                        on_click=load_and_assess)
+            c[3].button("Assess", key=f"ld_{row[0]}", type="primary", use_container_width=True, on_click=load_and_assess)
             c[4].button("History", key=f"hist_{row[0]}", use_container_width=True, on_click=quick_history)
 
             if c[5].button("View", key=f"sh_{row[0]}", use_container_width=True):
@@ -500,15 +481,12 @@ elif page == "📝 Assessment":
     else:
         st.markdown(f"### Assessing: **{ap['p_name']}** ({ap['case_no']})")
 
-
         def sync_assess():
             ap["assessment"] = st.session_state.assess_input
-
 
         def save_notes_and_proceed():
             ap["assessment"] = st.session_state.assess_input
             nav_to("📋 Prescription")
-
 
         st.text_area(
             "Today's Clinical Notes / Assessment Result",
@@ -527,7 +505,6 @@ elif page == "📋 Prescription":
     c1, c2 = st.columns([4, 1])
     c1.subheader("Step 3: Update Exercise Prescription")
 
-
     def blank_patient():
         st.session_state.active_patient = {
             "case_no": "", "p_name": "New Patient", "p_class": "Class I",
@@ -539,10 +516,8 @@ elif page == "📋 Prescription":
             "op_notes": "", "op_date": datetime.now().date()
         }
 
-
     c2.button("✨ Blank New Patient", type="primary", use_container_width=True, on_click=blank_patient)
     if ap["is_loaded"]: st.info(f"✏️ **Updating Prescription for {ap['p_name']}.**")
-
 
     def sync_form():
         ap["case_no"] = st.session_state.rx_case
@@ -559,7 +534,6 @@ elif page == "📋 Prescription":
         ap["op_notes"] = st.session_state.rx_op_notes
         ap["op_date"] = st.session_state.rx_op_d
 
-
     def toggle_ex(eid):
         if st.session_state[f"ui_{eid}"]:
             if eid not in ap["exercises"]:
@@ -573,18 +547,15 @@ elif page == "📋 Prescription":
         else:
             if eid in ap["exercises"]: del ap["exercises"][eid]
 
-
     def update_dict(eid, key, val_key):
         if eid not in ap["exercises"]: ap["exercises"][eid] = {}
         ap["exercises"][eid][key] = st.session_state[val_key]
-
 
     def remove_cart_item(item_eid):
         if item_eid in ap["exercises"]:
             del ap["exercises"][item_eid]
         if f"ui_{item_eid}" in st.session_state:
             st.session_state[f"ui_{item_eid}"] = False
-
 
     def check_in_patient():
         pre_list = []
@@ -623,7 +594,6 @@ elif page == "📋 Prescription":
                ap["current_nd"], ap["current_nt"], ap["assessment"], st.session_state.current_therapist)
         ap["is_loaded"] = False
         nav_to("🗒️ Active Cases")
-
 
     # --- TOP SECTION: Patient Data Container ---
     st.markdown('<div class="dash-header">👤 Patient Data & Operation Details</div>', unsafe_allow_html=True)
@@ -1150,7 +1120,6 @@ elif page == "📋 Prescription":
         with st.container(border=True):
             s_c1, s_c2 = st.columns(2)
 
-            # SPLIT LOGIC: Assign to Left/Right columns to balance space
             for cat, items in EXERCISE_DB.items():
                 if cat in ["Electrotherapy", "Mobilization", "Strengthening"]:
                     col_to_use = s_c1
@@ -1172,7 +1141,6 @@ elif page == "🗒️ Active Cases":
     rows = conn.execute(
         "SELECT id, case_no, p_name, prescription_json, next_appt_date, next_appt_time, assessment_text, p_precautions, therapist, op_details, op_date FROM history WHERE is_checked_in = 1 AND id IN (SELECT MAX(id) FROM history GROUP BY case_no) ORDER BY p_name ASC").fetchall()
 
-    # Get current queue cases to show status
     queued_cases = [r[0] for r in conn.execute("SELECT case_no FROM queues").fetchall()]
     conn.close()
 
@@ -1202,9 +1170,7 @@ elif page == "🗒️ Active Cases":
                         c1, c2 = st.columns([0.7, 0.3])
                         is_done = ex.get('done', False)
 
-                        # Generate the dynamic checkbox key so auto-ticking works via session state
                         checkbox_key = f"done_{r[1]}_{ex['id']}"
-                        # Ensure it exists in session state if it was auto-ticked from the Queue tab
                         if checkbox_key not in st.session_state:
                             st.session_state[checkbox_key] = is_done
 
@@ -1216,7 +1182,6 @@ elif page == "🗒️ Active Cases":
                             args=(r[0], r[1], ex['id'])
                         )
 
-                        # Queue Button for specific IDs
                         if ex['id'] in QUEUEABLE_IDS:
                             q_label = "✅ 排隊中" if r[1] in queued_cases else "🚦 排隊"
                             if c2.button(q_label, key=f"q_{r[1]}_{ex['id']}", disabled=r[1] in queued_cases):
@@ -1246,6 +1211,7 @@ elif page == "🗒️ Active Cases":
     else:
         st.info("Gym is empty.")
 
+
 # --- PAGE: QUEUE STATUS ---
 elif page == "🚦 Queue Status":
     st.subheader("🚦 Equipment Real-time Queue List")
@@ -1260,7 +1226,6 @@ elif page == "🚦 Queue Status":
             st.markdown(f"### ⚙️ {item_label}")
             item_q = q_data[q_data['item_id'] == item_id]
 
-            # Calculate Waiting Time (Includes BOTH waiting AND active patient times)
             active_and_waiting = item_q[item_q['status'].isin(['waiting', 'active'])]
             total_wait = active_and_waiting['prescribed_mins'].sum()
             st.markdown(f"Estimated Wait: <span class='wait-time'>{total_wait} mins</span>", unsafe_allow_html=True)
@@ -1283,12 +1248,12 @@ elif page == "🚦 Queue Status":
                     b1, b2 = st.columns(2)
                     if not is_active:
                         if b1.button("▶️ Start", key=f"start_{p['id']}"):
-                            # This will NOW auto-tick the exercise in the database and session state
                             update_queue_status(p['id'], "active", p['case_no'], p['item_id'])
                             st.rerun()
                     if b2.button("✅ Finish", key=f"fin_{p['id']}"):
                         update_queue_status(p['id'], "finished")
                         st.rerun()
+
 
 # --- PAGE 5: DASHBOARD ---
 elif page == "📊 Dashboard":
